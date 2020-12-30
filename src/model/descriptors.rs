@@ -15,12 +15,15 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use lnpbp::bitcoin::{self, blockdata::script::Error as ScriptError, Script};
+use lnpbp::bp::DescriptorCategory;
 use lnpbp::hex::{self, FromHex};
 use lnpbp::miniscript::{
-    self, Descriptor, Miniscript, ScriptContext, Terminal,
+    self, Descriptor, Miniscript, NullCtx, ScriptContext, Terminal,
 };
 
 use super::TrackingKey;
+
+// TODO: Consider moving to LNP/BP Core Library
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, From, Error)]
 #[display(doc_comments)]
@@ -73,7 +76,7 @@ impl DescriptorGenerator {
         if self.types.hashed {
             d.push(if single { "pkh" } else { "sh" });
         }
-        if self.types.compat {
+        if self.types.nested {
             d.push(if single { "sh_wpkh" } else { "sh_wsh" });
         }
         if self.types.segwit {
@@ -103,7 +106,7 @@ impl DescriptorGenerator {
     pub fn pubkey_scripts_count(&self) -> u32 {
         self.types.bare as u32
             + self.types.hashed as u32
-            + self.types.compat as u32
+            + self.types.nested as u32
             + self.types.segwit as u32
             + self.types.taproot as u32
     }
@@ -111,7 +114,7 @@ impl DescriptorGenerator {
     pub fn pubkey_scripts(
         &self,
         index: u32,
-    ) -> Result<HashMap<DescriptorType, Script>, Error> {
+    ) -> Result<HashMap<DescriptorCategory, Script>, Error> {
         let mut scripts = HashMap::with_capacity(5);
         let single = if let DescriptorContent::SingleSig(_) = self.content {
             Some(self.content.public_key(index).expect("Can't fail"))
@@ -124,7 +127,7 @@ impl DescriptorGenerator {
             } else {
                 Descriptor::Bare(self.content.miniscript(index)?)
             };
-            scripts.insert(DescriptorType::Bare, d.script_pubkey());
+            scripts.insert(DescriptorCategory::Bare, d.script_pubkey(NullCtx));
         }
         if self.types.hashed {
             let d = if let Some(pk) = single {
@@ -132,15 +135,17 @@ impl DescriptorGenerator {
             } else {
                 Descriptor::Sh(self.content.miniscript(index)?)
             };
-            scripts.insert(DescriptorType::Hashed, d.script_pubkey());
+            scripts
+                .insert(DescriptorCategory::Hashed, d.script_pubkey(NullCtx));
         }
-        if self.types.compat {
+        if self.types.nested {
             let d = if let Some(pk) = single {
                 Descriptor::ShWpkh(pk)
             } else {
                 Descriptor::ShWsh(self.content.miniscript(index)?)
             };
-            scripts.insert(DescriptorType::Compat, d.script_pubkey());
+            scripts
+                .insert(DescriptorCategory::Nested, d.script_pubkey(NullCtx));
         }
         if self.types.segwit {
             let d = if let Some(pk) = single {
@@ -148,7 +153,8 @@ impl DescriptorGenerator {
             } else {
                 Descriptor::Wsh(self.content.miniscript(index)?)
             };
-            scripts.insert(DescriptorType::SegWit, d.script_pubkey());
+            scripts
+                .insert(DescriptorCategory::SegWit, d.script_pubkey(NullCtx));
         }
         /* TODO: Enable once Taproot will go live
         if self.taproot {
@@ -160,44 +166,25 @@ impl DescriptorGenerator {
 }
 
 #[derive(
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Debug,
-    Hash,
-    StrictEncode,
-    StrictDecode,
-)]
-pub enum DescriptorType {
-    Bare,
-    Hashed,
-    Compat,
-    SegWit,
-    Taproot,
-}
-
-#[derive(
     Clone, PartialEq, Eq, PartialOrd, Ord, Debug, StrictEncode, StrictDecode,
 )]
 pub struct DescriptorTypes {
     pub bare: bool,
     pub hashed: bool,
-    pub compat: bool,
+    pub nested: bool,
     pub segwit: bool,
     pub taproot: bool,
 }
 
 impl DescriptorTypes {
-    pub fn has_match(&self, descriptor_type: DescriptorType) -> bool {
+    pub fn has_match(&self, descriptor_type: DescriptorCategory) -> bool {
         match descriptor_type {
-            DescriptorType::Bare => self.bare,
-            DescriptorType::Hashed => self.hashed,
-            DescriptorType::Compat => self.compat,
-            DescriptorType::SegWit => self.segwit,
-            DescriptorType::Taproot => self.taproot,
+            DescriptorCategory::Bare => self.bare,
+            DescriptorCategory::Hashed => self.hashed,
+            DescriptorCategory::Nested => self.nested,
+            DescriptorCategory::SegWit => self.segwit,
+            DescriptorCategory::Taproot => self.taproot,
+            _ => false,
         }
     }
 }
